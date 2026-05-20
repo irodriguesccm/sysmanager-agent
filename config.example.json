@@ -1,0 +1,9 @@
+{
+  "serverUrl": "ws://10.14.218.84:7877/ws/agent",
+  "token": "TOKEN_GERADO_NO_CONSOLE",
+  "agentName": "Agent-001",
+  "reportInterval": 5000,
+  "localApiBaseUrl": "http://127.0.0.1:3001",
+  "localApiPort": 3001,
+  "stateDir": "/etc/sysmanager-agent"
+}

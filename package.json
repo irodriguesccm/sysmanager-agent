@@ -1,0 +1,17 @@
+{
+  "name": "sysmanager-agent",
+  "version": "1.0.0",
+  "type": "module",
+  "description": "SysManager Agent - instale nos servidores remotos",
+  "main": "index.js",
+  "bin": {
+    "sysmanager-agent": "./index.js"
+  },
+  "scripts": {
+    "start": "node index.js --config ./config.json",
+    "dev": "node index.js --config ./config.json"
+  },
+  "dependencies": {
+    "ws": "^8.18.0"
+  }
+}
