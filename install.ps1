@@ -79,12 +79,29 @@ Write-Step "Preparando diretorios"
 New-Item -Path $agentDir -ItemType Directory -Force | Out-Null
 New-Item -Path $configDir -ItemType Directory -Force | Out-Null
 
-Write-Step "Baixando arquivos do agent"
+$scriptBase = $PSScriptRoot
 $runtimeFiles = @("index.js", "local-api-fallback.js", "package.json")
+$hasLocalFiles = $true
+
 foreach ($file in $runtimeFiles) {
-  $src = "$SourceBaseUrl/$file"
-  $dst = Join-Path $agentDir $file
-  Invoke-WebRequest -UseBasicParsing $src -OutFile $dst
+  if (-not (Test-Path (Join-Path $scriptBase $file))) {
+    $hasLocalFiles = $false
+    break
+  }
+}
+
+if ($hasLocalFiles) {
+  Write-Step "Copiando arquivos locais do repositorio"
+  foreach ($file in $runtimeFiles) {
+    Copy-Item -Path (Join-Path $scriptBase $file) -Destination (Join-Path $agentDir $file) -Force
+  }
+} else {
+  Write-Step "Baixando arquivos do agent"
+  foreach ($file in $runtimeFiles) {
+    $src = "$SourceBaseUrl/$file"
+    $dst = Join-Path $agentDir $file
+    Invoke-WebRequest -UseBasicParsing $src -OutFile $dst
+  }
 }
 
 Write-Step "Instalando dependencias npm"
