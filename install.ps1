@@ -28,8 +28,8 @@ if (-not (Test-Administrator)) {
   throw "Execute este script em um PowerShell aberto como Administrador."
 }
 
-$agentDir = Join-Path $env:ProgramData "SysManagerAgent"
-$configDir = Join-Path $env:ProgramData "SysManagerAgent"
+$agentDir = "C:\sysmanager-agent"
+$configDir = "C:\sysmanager-agent"
 $configFile = Join-Path $configDir "config.json"
 $serviceName = "sysmanager-agent"
 
