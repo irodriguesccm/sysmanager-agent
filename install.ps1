@@ -6,6 +6,7 @@ param(
   [string]$Server,
 
   [string]$SourceBaseUrl,
+  [string]$RepoZipUrl = "https://codeload.github.com/irodriguesccm/sysmanager-agent/zip/refs/heads/main",
   [string]$Name = "Agent-$env:COMPUTERNAME",
   [int]$Interval = 5000,
   [string]$Api = "http://127.0.0.1:3001"
@@ -105,11 +106,45 @@ if ($hasLocalFiles) {
     Copy-Item -Path (Join-Path $scriptBase $file) -Destination (Join-Path $agentDir $file) -Force
   }
 } else {
-  Write-Step "Baixando arquivos do agent"
-  foreach ($file in $runtimeFiles) {
-    $src = "$SourceBaseUrl/$file"
-    $dst = Join-Path $agentDir $file
-    Invoke-WebRequest -UseBasicParsing $src -OutFile $dst
+  Write-Step "Baixando repositorio completo do agent"
+  $zipPath = Join-Path $env:TEMP "sysmanager-agent-main.zip"
+  $extractRoot = Join-Path $env:TEMP ("sysmanager-agent-extract-" + [Guid]::NewGuid().ToString("N"))
+
+  if (Test-Path $zipPath) { Remove-Item -Force $zipPath }
+  New-Item -Path $extractRoot -ItemType Directory -Force | Out-Null
+
+  Invoke-WebRequest -UseBasicParsing $RepoZipUrl -OutFile $zipPath
+  Expand-Archive -Path $zipPath -DestinationPath $extractRoot -Force
+
+  $repoRoot = Get-ChildItem -Path $extractRoot -Directory | Select-Object -First 1
+  if (-not $repoRoot) {
+    throw "Nao foi possivel localizar a pasta extraida do repositorio."
+  }
+
+  $candidateDirs = @(
+    $repoRoot.FullName,
+    (Join-Path $repoRoot.FullName 'agent')
+  )
+
+  $sourceDir = $null
+  foreach ($dir in $candidateDirs) {
+    if ((Test-Path (Join-Path $dir 'package.json')) -and (Test-Path (Join-Path $dir 'index.js'))) {
+      $sourceDir = $dir
+      break
+    }
+  }
+
+  if (-not $sourceDir) {
+    throw "Repositorio baixado nao contem runtime do agent (package.json/index.js)."
+  }
+
+  Copy-Item -Path (Join-Path $sourceDir '*') -Destination $agentDir -Recurse -Force
+
+  if (Test-Path $extractRoot) { Remove-Item -Recurse -Force $extractRoot }
+  if (Test-Path $zipPath) { Remove-Item -Force $zipPath }
+
+  if (-not (Test-Path (Join-Path $agentDir 'local-api-fallback.js'))) {
+    Write-Step "Aviso: local-api-fallback.js nao encontrado no repositorio."
   }
 }
 
