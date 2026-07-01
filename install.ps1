@@ -13,6 +13,15 @@ param(
 
 $ErrorActionPreference = "Stop"
 
+function Assert-ExternalSuccess {
+  param(
+    [string]$StepName
+  )
+  if ($LASTEXITCODE -ne 0) {
+    throw "$StepName falhou com codigo de saida $LASTEXITCODE"
+  }
+}
+
 function Write-Step {
   param([string]$Message)
   Write-Host "[SysManager] $Message"
@@ -104,9 +113,23 @@ if ($hasLocalFiles) {
   }
 }
 
+# Validate downloaded/copied files to avoid HTML payloads from proxy/frontends.
+$packagePath = Join-Path $agentDir "package.json"
+$packageHead = (Get-Content -Path $packagePath -Raw).TrimStart()
+if (-not $packageHead.StartsWith('{')) {
+  throw "package.json invalido em $packagePath. Verifique SourceBaseUrl: $SourceBaseUrl"
+}
+
+$indexPath = Join-Path $agentDir "index.js"
+$indexHead = (Get-Content -Path $indexPath -Raw).TrimStart().ToLowerInvariant()
+if ($indexHead.StartsWith('<!doctype') -or $indexHead.StartsWith('<html')) {
+  throw "index.js invalido em $indexPath. Verifique SourceBaseUrl: $SourceBaseUrl"
+}
+
 Write-Step "Instalando dependencias npm"
 Push-Location $agentDir
 npm install --omit=dev --quiet
+Assert-ExternalSuccess -StepName "npm install"
 Pop-Location
 
 Write-Step "Gerando configuracao"
@@ -126,13 +149,21 @@ if ($existing) {
     Stop-Service -Name $serviceName -Force -ErrorAction SilentlyContinue
   }
   sc.exe delete $serviceName | Out-Null
+  Assert-ExternalSuccess -StepName "sc delete"
   Start-Sleep -Seconds 1
 }
 
 $nodePath = $nodeCmd.Source
 $binPath = '"{0}" "{1}" --config "{2}"' -f $nodePath, (Join-Path $agentDir "index.js"), $configFile
 sc.exe create $serviceName binPath= $binPath start= auto DisplayName= "SysManager Agent" | Out-Null
+Assert-ExternalSuccess -StepName "sc create"
 sc.exe description $serviceName "SysManager remote agent for Windows" | Out-Null
+Assert-ExternalSuccess -StepName "sc description"
+
+$serviceCheck = Get-Service -Name $serviceName -ErrorAction SilentlyContinue
+if (-not $serviceCheck) {
+  throw "Servico '$serviceName' nao foi criado corretamente."
+}
 
 Start-Service -Name $serviceName
 $service = Get-Service -Name $serviceName
