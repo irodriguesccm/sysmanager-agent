@@ -23,6 +23,7 @@ import { createLocalApiFallback } from './local-api-fallback.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const execAsync = promisify(exec);
+const isWindows = process.platform === 'win32';
 let localApiBaseUrl = process.env.LOCAL_API_BASE_URL || 'http://127.0.0.1:3001';
 const defaultStateDir = process.env.AGENT_STATE_DIR || path.join(process.cwd(), '.sysmanager-agent');
 let fallbackApi = createLocalApiFallback({ stateDir: defaultStateDir });
@@ -87,7 +88,81 @@ async function safeExec(cmd) {
   }
 }
 
+function escapePowerShell(value) {
+  return String(value ?? '').replace(/'/g, "''");
+}
+
+async function safeExecPowerShell(script) {
+  try {
+    const escaped = script.replace(/"/g, '`"');
+    const { stdout } = await execAsync(`powershell -NoProfile -ExecutionPolicy Bypass -Command "${escaped}"`, { timeout: 8000 });
+    return stdout.trim();
+  } catch {
+    return '';
+  }
+}
+
 async function collectSystemInfo() {
+  if (isWindows) {
+    const raw = await safeExecPowerShell(`
+      $os = Get-CimInstance Win32_OperatingSystem
+      $cpu = Get-CimInstance Win32_Processor | Select-Object -First 1
+      $disk = Get-CimInstance Win32_LogicalDisk -Filter "DeviceID='C:'" | Select-Object -First 1
+      $payload = [ordered]@{
+        hostname = $env:COMPUTERNAME
+        os = $os.Caption
+        kernel = $os.Version
+        uptime = ([Math]::Round(((Get-Date) - $os.LastBootUpTime).TotalHours, 2).ToString() + ' horas')
+        loadAverage = [ordered]@{ one = 'N/A'; five = 'N/A'; fifteen = 'N/A' }
+        cpu = [ordered]@{ count = [string]$cpu.NumberOfLogicalProcessors; model = $cpu.Name }
+        memory = [ordered]@{
+          totalBytes = [int64]($os.TotalVisibleMemorySize * 1KB)
+          usedBytes = [int64](($os.TotalVisibleMemorySize - $os.FreePhysicalMemory) * 1KB)
+          total = ([Math]::Round(($os.TotalVisibleMemorySize * 1KB) / 1GB, 2).ToString() + ' GB')
+          used = ([Math]::Round((($os.TotalVisibleMemorySize - $os.FreePhysicalMemory) * 1KB) / 1GB, 2).ToString() + ' GB')
+          free = ([Math]::Round(($os.FreePhysicalMemory * 1KB) / 1GB, 2).ToString() + ' GB')
+          available = ([Math]::Round(($os.FreePhysicalMemory * 1KB) / 1GB, 2).ToString() + ' GB')
+        }
+        disk = [ordered]@{
+          filesystem = 'C:'
+          size = ([Math]::Round($disk.Size / 1GB, 2).ToString() + ' GB')
+          used = ([Math]::Round(($disk.Size - $disk.FreeSpace) / 1GB, 2).ToString() + ' GB')
+          available = ([Math]::Round($disk.FreeSpace / 1GB, 2).ToString() + ' GB')
+          usePercent = ([Math]::Round((($disk.Size - $disk.FreeSpace) / $disk.Size) * 100, 0).ToString() + '%')
+        }
+      }
+      $payload | ConvertTo-Json -Depth 6 -Compress
+    `);
+
+    if (!raw) {
+      return {
+        hostname: 'N/A',
+        os: 'Windows',
+        kernel: 'N/A',
+        uptime: 'N/A',
+        loadAverage: { one: 'N/A', five: 'N/A', fifteen: 'N/A' },
+        cpu: { count: 'N/A', model: 'N/A' },
+        memory: { total: 'N/A', used: 'N/A', free: 'N/A', available: 'N/A', totalBytes: 0, usedBytes: 0 },
+        disk: { filesystem: 'C:', size: 'N/A', used: 'N/A', available: 'N/A', usePercent: 'N/A' },
+      };
+    }
+
+    try {
+      return JSON.parse(raw);
+    } catch {
+      return {
+        hostname: 'N/A',
+        os: 'Windows',
+        kernel: 'N/A',
+        uptime: 'N/A',
+        loadAverage: { one: 'N/A', five: 'N/A', fifteen: 'N/A' },
+        cpu: { count: 'N/A', model: 'N/A' },
+        memory: { total: 'N/A', used: 'N/A', free: 'N/A', available: 'N/A', totalBytes: 0, usedBytes: 0 },
+        disk: { filesystem: 'C:', size: 'N/A', used: 'N/A', available: 'N/A', usePercent: 'N/A' },
+      };
+    }
+  }
+
   const [hostname, osRelease, kernel, uptime, loadavg, meminfo, diskUsage, cpuInfo] = await Promise.all([
     safeExec('hostname'),
     safeExec('cat /etc/os-release | grep "PRETTY_NAME" | cut -d= -f2 | tr -d \'"\''),
@@ -138,6 +213,12 @@ async function collectSystemInfo() {
 }
 
 async function collectCpuUsage() {
+  if (isWindows) {
+    const usageRaw = await safeExecPowerShell("(Get-Counter '\\Processor(_Total)\\% Processor Time').CounterSamples.CookedValue | ForEach-Object { [Math]::Round($_, 0) }");
+    const usage = parseInt(usageRaw, 10);
+    return Number.isFinite(usage) ? usage : 0;
+  }
+
   // Read /proc/stat twice with 500ms gap for accurate CPU %
   const read = async () => {
     const raw = await safeExec('head -1 /proc/stat');
@@ -155,6 +236,50 @@ async function collectCpuUsage() {
 }
 
 async function collectServices() {
+  if (isWindows) {
+    try {
+      const result = await fallbackApi.handleRequest('GET', '/api/services', {});
+      if (result.ok && Array.isArray(result.data)) {
+        return result.data.map((svc) => {
+          const normalizedStatus =
+            svc.status === 'failed' ? 'failed' :
+            svc.status === 'running' ? 'running' :
+            'inactive';
+
+          return {
+            name: svc.name,
+            active: normalizedStatus === 'running' ? 'active' : normalizedStatus,
+            sub: normalizedStatus === 'running' ? 'running' : normalizedStatus,
+            status: normalizedStatus,
+            monitored: true,
+          };
+        });
+      }
+    } catch {
+      // fallback to PowerShell list below
+    }
+
+    const raw = await safeExecPowerShell("Get-Service | Select-Object Name, Status | ConvertTo-Json -Depth 4 -Compress");
+    if (!raw) return [];
+    try {
+      const parsed = JSON.parse(raw);
+      const list = Array.isArray(parsed) ? parsed : [parsed];
+      return list.map((svc) => {
+        const status = String(svc.Status || '').toLowerCase();
+        const normalizedStatus = status === 'running' ? 'running' : 'inactive';
+        return {
+          name: svc.Name,
+          active: normalizedStatus,
+          sub: normalizedStatus,
+          status: normalizedStatus,
+          monitored: false,
+        };
+      });
+    } catch {
+      return [];
+    }
+  }
+
   try {
     const result = await fallbackApi.handleRequest('GET', '/api/services', {});
     if (result.ok && Array.isArray(result.data)) {
@@ -282,27 +407,39 @@ async function handleCommand(msg) {
     }
 
     if (command === 'service.start') {
-      const r = await safeExec(`systemctl start ${args.name}.service`);
+      const r = isWindows
+        ? await safeExecPowerShell(`Start-Service -Name '${escapePowerShell(args.name)}' -ErrorAction Stop; 'ok'`)
+        : await safeExec(`systemctl start ${args.name}.service`);
       return respond({ success: true, output: r });
     }
     if (command === 'service.stop') {
-      const r = await safeExec(`systemctl stop ${args.name}.service`);
+      const r = isWindows
+        ? await safeExecPowerShell(`Stop-Service -Name '${escapePowerShell(args.name)}' -Force -ErrorAction Stop; 'ok'`)
+        : await safeExec(`systemctl stop ${args.name}.service`);
       return respond({ success: true, output: r });
     }
     if (command === 'service.restart') {
-      const r = await safeExec(`systemctl restart ${args.name}.service`);
+      const r = isWindows
+        ? await safeExecPowerShell(`Restart-Service -Name '${escapePowerShell(args.name)}' -Force -ErrorAction Stop; 'ok'`)
+        : await safeExec(`systemctl restart ${args.name}.service`);
       return respond({ success: true, output: r });
     }
     if (command === 'service.enable') {
-      const r = await safeExec(`systemctl enable ${args.name}.service`);
+      const r = isWindows
+        ? await safeExecPowerShell(`Set-Service -Name '${escapePowerShell(args.name)}' -StartupType Automatic -ErrorAction Stop; 'ok'`)
+        : await safeExec(`systemctl enable ${args.name}.service`);
       return respond({ success: true, output: r });
     }
     if (command === 'service.disable') {
-      const r = await safeExec(`systemctl disable ${args.name}.service`);
+      const r = isWindows
+        ? await safeExecPowerShell(`Set-Service -Name '${escapePowerShell(args.name)}' -StartupType Disabled -ErrorAction Stop; 'ok'`)
+        : await safeExec(`systemctl disable ${args.name}.service`);
       return respond({ success: true, output: r });
     }
     if (command === 'terminal.execute') {
-      const r = await safeExec(args.command);
+      const r = isWindows
+        ? await safeExecPowerShell(String(args.command || ''))
+        : await safeExec(args.command);
       return respond({ success: true, output: r });
     }
     return respond({ success: false, error: `Comando desconhecido: ${command}` });
