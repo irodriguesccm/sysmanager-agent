@@ -14,6 +14,7 @@ SERVER_URL=""
 AGENT_NAME="Agent-$(hostname)"
 INTERVAL=5000
 LOCAL_API_BASE_URL="http://127.0.0.1:3001"
+SOURCE_BASE_URL=""
 
 # Parse args
 while [[ $# -gt 0 ]]; do
@@ -23,6 +24,7 @@ while [[ $# -gt 0 ]]; do
     --name)    AGENT_NAME="$2"; shift 2 ;;
     --interval) INTERVAL="$2"; shift 2 ;;
     --api) LOCAL_API_BASE_URL="$2"; shift 2 ;;
+    --source) SOURCE_BASE_URL="$2"; shift 2 ;;
     *) echo "Argumento desconhecido: $1"; exit 1 ;;
   esac
 done
@@ -36,6 +38,14 @@ echo "=== SysManager Agent Installer ==="
 echo "Servidor: $SERVER_URL"
 echo "Nome:     $AGENT_NAME"
 echo "API local: $LOCAL_API_BASE_URL"
+
+if [ -z "$SOURCE_BASE_URL" ]; then
+  SERVER_HOST=$(echo "$SERVER_URL" | sed -E 's#^[a-zA-Z]+://([^:/]+).*#\1#')
+  SOURCE_BASE_URL="http://${SERVER_HOST}:7878/agent/runtime"
+fi
+
+SOURCE_BASE_URL="${SOURCE_BASE_URL%/}"
+echo "Origem dos arquivos: $SOURCE_BASE_URL"
 echo ""
 
 # Check Node.js
@@ -64,11 +74,10 @@ echo "[✓] Node.js $(node --version)"
 # Create directories
 mkdir -p "$AGENT_DIR" "$CONFIG_DIR"
 
-# Copy agent files (assumes script is run from agent directory or files are embedded)
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-cp "$SCRIPT_DIR/index.js" "$AGENT_DIR/"
-cp "$SCRIPT_DIR/local-api-fallback.js" "$AGENT_DIR/"
-cp "$SCRIPT_DIR/package.json" "$AGENT_DIR/"
+# Download agent runtime files
+curl -fsSL "$SOURCE_BASE_URL/index.js" -o "$AGENT_DIR/index.js"
+curl -fsSL "$SOURCE_BASE_URL/local-api-fallback.js" -o "$AGENT_DIR/local-api-fallback.js"
+curl -fsSL "$SOURCE_BASE_URL/package.json" -o "$AGENT_DIR/package.json"
 
 # Install dependencies
 cd "$AGENT_DIR"

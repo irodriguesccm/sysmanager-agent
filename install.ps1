@@ -5,6 +5,7 @@ param(
   [Parameter(Mandatory = $true)]
   [string]$Server,
 
+  [string]$SourceBaseUrl,
   [string]$Name = "Agent-$env:COMPUTERNAME",
   [int]$Interval = 5000,
   [string]$Api = "http://127.0.0.1:3001"
@@ -32,15 +33,22 @@ $configDir = Join-Path $env:ProgramData "SysManagerAgent"
 $configFile = Join-Path $configDir "config.json"
 $serviceName = "sysmanager-agent"
 
-$scriptBase = $PSScriptRoot
-if ([string]::IsNullOrWhiteSpace($scriptBase)) {
-  throw "Nao foi possivel determinar o diretorio base do instalador."
+if ([string]::IsNullOrWhiteSpace($SourceBaseUrl)) {
+  try {
+    $serverUri = [Uri]$Server
+    $SourceBaseUrl = "http://$($serverUri.Host):7878/agent/runtime"
+  } catch {
+    throw "Nao foi possivel derivar SourceBaseUrl. Informe -SourceBaseUrl explicitamente."
+  }
 }
+
+$SourceBaseUrl = $SourceBaseUrl.TrimEnd('/')
 
 Write-Step "Iniciando instalacao do SysManager Agent para Windows"
 Write-Step "Servidor: $Server"
 Write-Step "Nome: $Name"
 Write-Step "API local: $Api"
+Write-Step "Origem dos arquivos: $SourceBaseUrl"
 
 Write-Step "Verificando Node.js e npm"
 $nodeCmd = Get-Command node -ErrorAction SilentlyContinue
@@ -71,10 +79,13 @@ Write-Step "Preparando diretorios"
 New-Item -Path $agentDir -ItemType Directory -Force | Out-Null
 New-Item -Path $configDir -ItemType Directory -Force | Out-Null
 
-Write-Step "Copiando arquivos do agent"
-Copy-Item -Path (Join-Path $scriptBase "index.js") -Destination (Join-Path $agentDir "index.js") -Force
-Copy-Item -Path (Join-Path $scriptBase "local-api-fallback.js") -Destination (Join-Path $agentDir "local-api-fallback.js") -Force
-Copy-Item -Path (Join-Path $scriptBase "package.json") -Destination (Join-Path $agentDir "package.json") -Force
+Write-Step "Baixando arquivos do agent"
+$runtimeFiles = @("index.js", "local-api-fallback.js", "package.json")
+foreach ($file in $runtimeFiles) {
+  $src = "$SourceBaseUrl/$file"
+  $dst = Join-Path $agentDir $file
+  Invoke-WebRequest -UseBasicParsing $src -OutFile $dst
+}
 
 Write-Step "Instalando dependencias npm"
 Push-Location $agentDir
