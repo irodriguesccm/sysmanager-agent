@@ -1,0 +1,6 @@
+{
+  "serverUrl": "ws://10.14.218.84:7877/ws/agent",
+  "token": "197fb603773d410d955eaf3c508c504f95566af85ef547f8b517928d85093cd3",
+  "agentName": "ccm-steampipe",
+  "reportInterval": 5000
+}
